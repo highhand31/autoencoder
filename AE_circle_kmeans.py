@@ -116,7 +116,10 @@ class AE():
         encode_shape = self.encode4.shape
         self.input_x_flatten = tf.reshape(self.encode4, (-1, encode_shape[1]*encode_shape[2]*encode_shape[3]))
         self.loss_AE = tf.reduce_mean(tf.pow(self.prediction - self.input_x, 2), name="loss_AE")
-        self.loss_kmeans = tf.reduce_mean(self.input_center*tf.pow(tf.log(self.input_x_flatten+num_mini) - tf.log(self.input_center+num_mini), 2), name="loss_kmeans")
+        sum_input_x_flatten = tf.reduce_sum(self.input_x_flatten)
+        sum_input_center = tf.reduce_sum(self.input_center)
+        self.loss_kmeans = tf.reduce_mean(self.input_center/sum_input_center*tf.pow(tf.log(self.input_x_flatten/sum_input_x_flatten+num_mini) -
+                                                                   tf.log(self.input_center/sum_input_center+num_mini), 2), name="loss_kmeans")
         # self.loss_kmeans = tf.reduce_sum(self.input_center*(tf.log(self.input_center+num_mini)-tf.log(self.input_x_flatten+num_mini)),name='loss_kmeans')
         # self.loss_kmeans = tf.reduce_mean(tf.pow(self.input_x_flatten - self.input_center, 2), name="loss_kmeans")
         # self.loss_kmeans = tf.distributions.kl_divergence(self.input_center,self.input_x_flatten)
@@ -839,7 +842,7 @@ if __name__ == "__main__":
     out_dir_prefix = os.path.join(save_path, "model")
     height = 64
     width = 64
-    epochs = 80
+    epochs = 30
     GPU_ratio = 0.4
     batch_size = 1
     train_ratio = 1.0
