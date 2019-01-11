@@ -29,7 +29,7 @@ class AE():
         self.kel_x = 9
         self.kel_y = 9
         self.deep = 64
-        self.deep_mimic = int(self.deep/2)
+        self.deep_mimic = int(self.deep/4)
         self.UDP_init_flag = False
         self.UDP_init()
         #self.data_init()
@@ -93,16 +93,21 @@ class AE():
 
         # self.noise_x = tf.placeholder(tf.float32, self.input_dim, name="noise_x")
         self.input_x = tf.placeholder(tf.float32, self.input_dim, name="input_x")
+        self.input_mimic = tf.placeholder(tf.float32, self.input_dim, name="input_mimic")
 
         self.reconstruct = self.__inference(self.input_x)
-        self.squeeze = self.__mimic(self.reconstruct)
+        self.squeeze = self.__mimic(self.input_mimic)
         self.loss1 = tf.reduce_mean(tf.pow(self.reconstruct - self.input_x, 2),name="loss1")#input_x為有加noise的圖片
-        self.loss_mimic = tf.reduce_mean(tf.pow(self.squeeze - self.reconstruct, 2), name="loss_mimic")
-        self.loss = self.loss1 + self.loss_mimic
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(self.loss)
+        self.loss_mimic = tf.reduce_mean(tf.pow(self.squeeze - self.input_mimic, 2), name="loss_mimic")
+        # self.loss = self.loss1 + self.loss_mimic
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(self.loss1)
+        self.optimizer_mimic = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(self.loss_mimic)
+
 
         self.save_path = save_path
         self.out_dir_prefix = os.path.join(save_path, "model")
+        self.out_dir_prefix_2 = os.path.join(save_path, "squeece_model")
+
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
 
@@ -524,7 +529,7 @@ class AE():
                     # train data mean loss after a epoch
                     train_loss = []
                     for index in range(origin_data.shape[0]):
-                        single_loss = sess.run(self.loss, feed_dict={self.input_x: origin_data[index:index+1]
+                        single_loss = sess.run(self.loss1, feed_dict={self.input_x: origin_data[index:index+1]
                                                                      })
 
                         train_loss.append(single_loss)
@@ -566,7 +571,7 @@ class AE():
                     # test_loss = np.mean(test_loss)
 
                     #display Epoch information
-                    msg = "Epoch {}\ntrain set loss = {}".format(epoch, train_loss)
+                    msg = "Epoch {}_Big model\ntrain set loss = {}".format(epoch, train_loss)
                     print(msg)
                     #self.UDP_send(msg,self.send_address)
 
@@ -584,7 +589,7 @@ class AE():
                     graph = tf.get_default_graph().as_graph_def()
                     # output_graph_def = graph_util.convert_variables_to_constants(sess, graph,['output'])  # graph也可以直接填入sess.graph_def
                     output_graph_def = graph_util.convert_variables_to_constants(sess, graph,
-                                                                                 ['output/Relu',"pool4","mimic_output/Relu"])  # graph也可以直接填入sess.graph_def
+                                                                                 ['output/Relu'])  # graph也可以直接填入sess.graph_def
 
                     # 'model_saver/'為置放的資料夾，'combined_model.pb'為檔名
                     addr_tail = "pb_model.pb"
@@ -595,7 +600,25 @@ class AE():
 
                     #讀取PB檔製造reconstruct及mimic照片
                     # self.read_pb(pb_addr,epoch)
-                    test_fun.read_pb(pb_addr,epoch)
+                    #test_fun.read_pb(pb_addr,epoch,0)
+                    pic_path = r'E:\dataset\Surface_detection\crack\pill_magnesium_crack_069.png'
+
+                    x_test = []
+                    img = cv2.imread(pic_path)
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    img = cv2.resize(img, (64, 64))
+
+                    x_test.append(img)
+                    x_test = np.array(x_test)
+                    x_test = x_test / 255
+
+                    re_image = sess.run(self.reconstruct, feed_dict={self.input_x: x_test[0:1]
+                                                                     })
+                    re_image = re_image[0]*255
+                    re_image = cv2.cvtColor(re_image, cv2.COLOR_RGB2BGR)
+                    save_name = os.path.join(self.save_path, "epoch" + str(epoch) + "_" + "recon.png")
+                    cv2.imwrite(save_name,re_image)
+
 
 
                     #training data collection
@@ -623,7 +646,79 @@ class AE():
                         # self.UDP_send("UDP sender:loss = {},acc = {}".format(train_loss,acc),self.send_address)
                         self.UDP_send(jsonObj,self.send_address)
 
-                    # return train_loss, acc
+                    # Optimize squeece model
+                    input_mimic = []
+                    for index in range(total_batches):
+
+                        num_start = index * batch_size
+                        num_end = num_start + batch_size
+
+                        if num_end >= origin_data.shape[0] and batch_size > 1:
+                            num_end = origin_data.shape[0] - 1
+                        temp = sess.run(self.reconstruct, feed_dict={self.input_x: origin_data[num_start:num_end]
+                                                        })
+                        input_mimic.append(temp[0])
+                    input_mimic = np.array(input_mimic)
+
+                    print("input_mimic shape = {}".format(input_mimic.shape))
+
+                    for index in range(total_batches):
+
+                        num_start = index * batch_size
+                        num_end = num_start + batch_size
+
+                        if num_end >= origin_data.shape[0] and batch_size > 1:
+                            num_end = origin_data.shape[0] - 1
+                        sess.run(self.optimizer_mimic, feed_dict={self.input_mimic: input_mimic[num_start:num_end]
+                                                        })
+                    print("mimic optimizer ok")
+                    # train data mean loss after a epoch
+                    train_loss = []
+                    for index in range(input_mimic.shape[0]):
+                        single_loss = sess.run(self.loss_mimic, feed_dict={self.input_mimic: input_mimic[index:index + 1]
+                                                                      })
+
+                        train_loss.append(single_loss)
+
+                    train_loss = np.array(train_loss)
+                    train_stdv = np.std(train_loss)
+                    train_loss = np.mean(train_loss)
+
+
+
+                    # display Epoch information
+                    msg = "Epoch {}_Squeece model\ntrain set loss = {}".format(epoch, train_loss)
+                    print(msg)
+
+                    # 紀錄資料:本次epoch ckpt檔
+                    if save_ckpt is True:
+                        model_save_path = self.saver.save(sess, self.out_dir_prefix_2, global_step=epoch)
+
+                        print('Save model checkpoint to ', model_save_path)
+
+                    # 紀錄資料:pb檔
+                    graph = tf.get_default_graph().as_graph_def()
+                    # output_graph_def = graph_util.convert_variables_to_constants(sess, graph,['output'])  # graph也可以直接填入sess.graph_def
+                    output_graph_def = graph_util.convert_variables_to_constants(sess, graph,
+                                                                                 [
+                                                                                     'mimic_output/Relu'])  # graph也可以直接填入sess.graph_def
+
+                    # 'model_saver/'為置放的資料夾，'combined_model.pb'為檔名
+                    addr_tail = "_squeece_pb_model.pb"
+                    pb_addr = os.path.join(self.save_path, addr_tail)
+                    with tf.gfile.GFile(pb_addr, "wb") as f:
+
+                        f.write(output_graph_def.SerializeToString())
+                    # 讀取PB檔製造reconstruct及mimic照片
+                    # self.read_pb(pb_addr,epoch)
+                    # test_fun.read_pb(pb_addr, epoch, 1)
+                    mimic_image = sess.run(self.squeeze, feed_dict={self.input_mimic: x_test[0:1]
+                                                                     })
+                    mimic_image = mimic_image[0] * 255
+                    mimic_image = cv2.cvtColor(mimic_image, cv2.COLOR_RGB2BGR)
+                    save_name = os.path.join(self.save_path, "epoch" + str(epoch) + "_" + "mimic.png")
+                    cv2.imwrite(save_name, mimic_image)
+
             except:
                 print("執行訓練時出現錯誤，可能在使用fine tune時，height,width與模型不符合")
 
@@ -750,15 +845,15 @@ if __name__ == "__main__":
     save_path = r"model_saver\AE_circle_mimic"
     height = 64
     width = 64
-    epochs = 20
+    epochs = 80
     GPU_ratio = 0.5
     batch_size = 1
     train_ratio = 1.0
 
     #AE train
-    pic_path = r'E:\dataset\Surface_detection'
+    pic_path = r'E:\dataset\Surface_detection\good'
     (input_train, input_train_label, no_care, no_care_2) = cm.data_load(pic_path, train_ratio=1, resize=(64, 64),
-                                                                        shuffle=True, normalize=True, has_dir=True)
+                                                                        shuffle=False, normalize=True, has_dir=False)
 
     print('x_train shape = ', input_train.shape)
     print('x_train_label shape = ', input_train_label.shape)
